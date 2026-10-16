@@ -1,8 +1,6 @@
 
 import os
-import re
 import logging
-from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -15,17 +13,19 @@ from telegram.ext import (
     filters,
 )
 
-# توکن را در تنظیمات محیطی سرور وارد کن
 TOKEN = os.environ.get("BOT_TOKEN")
 
-START, NAME, BIRTHDAY, EYE_COLOR, USERNAME, CONFIRM = range(6)
+(
+    START, NAME, BIRTHDAY, EYE_COLOR, HEIGHT, WEIGHT,
+    HAIR_COLOR, HAIR_LENGTH, FAVORITE_COLOR, FAVORITE_SONG,
+    FAVORITE_NUMBER, FAVORITE_ANIMAL, USERNAME, CONFIRM
+) = range(14)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def digits_to_english(text: str) -> str:
-    """تبدیل ارقام فارسی و عربی به ارقام انگلیسی."""
+def digits_to_english(text):
     table = str.maketrans(
         "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
         "01234567890123456789",
@@ -33,191 +33,165 @@ def digits_to_english(text: str) -> str:
     return text.translate(table)
 
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    context.user_data.clear()
-
-    keyboard = InlineKeyboardMarkup([
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
         [
-            InlineKeyboardButton("بله ✅", callback_data="start_yes"),
-            InlineKeyboardButton("نخیر ❌", callback_data="start_no"),
+            InlineKeyboardButton("بله ✅", callback_data="yes"),
+            InlineKeyboardButton("نخیر ❌", callback_data="no"),
         ]
-    ])
+    ]
 
-    await update.effective_message.reply_text(
-        "سلام! 👋\n\n"
+    await update.message.reply_text(
         "آیا برای ثبت دیت با علی آمده‌اید؟",
-        reply_markup=keyboard,
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return START
 
 
-async def start_choice(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def start_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    if query.data == "start_no":
+    if query.data == "no":
         await query.answer(
-            "این دکمه کار نمی‌کند! لطفاً دکمه بله را بزنید.",
+            "باید دکمه بله را بزنید.",
             show_alert=True,
         )
         return START
 
     await query.answer()
-    await query.edit_message_text(
-        "خیلی هم عالی! 😊\n\n"
-        "لطفاً نام خود را وارد کنید:"
-    )
+    await query.edit_message_text("عالی! لطفاً نام خود را بنویسید:")
     return NAME
 
 
-async def get_name(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    name = update.effective_message.text.strip()
-
-    if not name:
-        await update.effective_message.reply_text(
-            "لطفاً نام خود را وارد کنید."
-        )
-        return NAME
-
-    context.user_data["name"] = name
-
-    await update.effective_message.reply_text(
-        "لطفاً تاریخ تولد خود را به عدد ارسال کنید.\n"
-        "مثال: 1388/05/12"
-    )
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["name"] = update.message.text.strip()
+    await update.message.reply_text("تاریخ تولد خود را به شکل عددی بنویسید؛ مثلاً 1388/05/12")
     return BIRTHDAY
 
 
-async def get_birthday(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    birthday = digits_to_english(
-        update.effective_message.text.strip()
-    )
-
-    try:
-        datetime.strptime(birthday, "%Y/%m/%d")
-    except ValueError:
-        await update.effective_message.reply_text(
-            "تاریخ تولد معتبر نیست.\n"
-            "لطفاً به شکل سال/ماه/روز ارسال کنید.\n"
-            "مثال: 1388/05/12"
-        )
-        return BIRTHDAY
-
-    context.user_data["birthday"] = birthday
-
-    await update.effective_message.reply_text(
-        "لطفاً رنگ چشم خود را ارسال کنید:"
-    )
+async def get_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["birthday"] = digits_to_english(update.message.text.strip())
+    await update.message.reply_text("رنگ چشم شما چیست؟")
     return EYE_COLOR
 
 
-async def get_eye_color(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    eye_color = update.effective_message.text.strip()
+async def get_eye_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["eye_color"] = update.message.text.strip()
+    await update.message.reply_text("قد شما چند سانتی‌متر است؟")
+    return HEIGHT
 
-    if not eye_color:
-        await update.effective_message.reply_text(
-            "لطفاً رنگ چشم خود را ارسال کنید."
-        )
-        return EYE_COLOR
 
-    context.user_data["eye_color"] = eye_color
+async def get_height(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["height"] = update.message.text.strip()
+    await update.message.reply_text("وزن شما چند کیلوگرم است؟")
+    return WEIGHT
 
-    await update.effective_message.reply_text(
-        "خیلی هم عالی! ✅ دیت ثبت شد.\n\n"
-        "لطفاً نام کاربری (آیدی) تلگرام خود را ارسال کنید.\n"
-        "مثال: @username"
+
+async def get_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["weight"] = update.message.text.strip()
+    await update.message.reply_text("رنگ موی شما چیست؟")
+    return HAIR_COLOR
+
+
+async def get_hair_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["hair_color"] = update.message.text.strip()
+    await update.message.reply_text("اندازه موی شما چقدر است؟")
+    return HAIR_LENGTH
+
+
+async def get_hair_length(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["hair_length"] = update.message.text.strip()
+    await update.message.reply_text("رنگ موردعلاقه شما چیست؟")
+    return FAVORITE_COLOR
+
+
+async def get_favorite_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["favorite_color"] = update.message.text.strip()
+    await update.message.reply_text("آهنگ موردعلاقه شما چیست؟")
+    return FAVORITE_SONG
+
+
+async def get_favorite_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["favorite_song"] = update.message.text.strip()
+    await update.message.reply_text("عدد موردعلاقه شما چیست؟")
+    return FAVORITE_NUMBER
+
+
+async def get_favorite_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["favorite_number"] = digits_to_english(
+        update.message.text.strip()
+    )
+    await update.message.reply_text("حیوان موردعلاقه شما چیست؟")
+    return FAVORITE_ANIMAL
+
+
+async def get_favorite_animal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["favorite_animal"] = update.message.text.strip()
+
+    await update.message.reply_text(
+        "خیلی هم عالی! دیت ثبت شد 😊\n\n"
+        "حالا نام کاربری تلگرام یا آیدی خود را بنویسید:"
     )
     return USERNAME
 
 
-async def get_username(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    username = update.effective_message.text.strip()
+async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["username"] = update.message.text.strip()
 
-    # اعتبارسنجی قالب آیدی تلگرام
-    if not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", username):
-        await update.effective_message.reply_text(
-            "آیدی معتبر نیست.\n"
-            "لطفاً آیدی را با @ ارسال کنید.\n"
-            "مثال: @username"
-        )
-        return USERNAME
+    d = context.user_data
 
-    context.user_data["username"] = username
-
-    data = context.user_data
-
-    report = (
-        "📋 مشخصات ثبت‌شده شما:\n\n"
-        f"👤 نام: {data['name']}\n"
-        f"🎂 تاریخ تولد: {data['birthday']}\n"
-        f"👁 رنگ چشم: {data['eye_color']}\n"
-        f"🔗 آیدی تلگرام: {data['username']}\n\n"
+    summary = (
+        "📋 اطلاعات ثبت‌شده شما:\n\n"
+        f"👤 نام: {d['name']}\n"
+        f"🎂 تاریخ تولد: {d['birthday']}\n"
+        f"👁 رنگ چشم: {d['eye_color']}\n"
+        f"📏 قد: {d['height']}\n"
+        f"⚖️ وزن: {d['weight']}\n"
+        f"💇 رنگ مو: {d['hair_color']}\n"
+        f"💇 اندازه مو: {d['hair_length']}\n"
+        f"🎨 رنگ موردعلاقه: {d['favorite_color']}\n"
+        f"🎵 آهنگ موردعلاقه: {d['favorite_song']}\n"
+        f"🔢 عدد موردعلاقه: {d['favorite_number']}\n"
+        f"🐾 حیوان موردعلاقه: {d['favorite_animal']}\n"
+        f"📱 نام کاربری یا آیدی: {d['username']}\n\n"
         "آیا اطلاعات بالا درست است؟"
     )
 
-    keyboard = InlineKeyboardMarkup([
+    keyboard = [
         [
-            InlineKeyboardButton(
-                "تأیید است ✅",
-                callback_data="confirm_yes",
-            ),
-            InlineKeyboardButton(
-                "تأیید نیست ❌",
-                callback_data="confirm_no",
-            ),
+            InlineKeyboardButton("تأیید است ✅", callback_data="confirm_yes"),
+            InlineKeyboardButton("تأیید نیست ❌", callback_data="confirm_no"),
         ]
-    ])
+    ]
 
-    await update.effective_message.reply_text(
-        report,
-        reply_markup=keyboard,
+    await update.message.reply_text(
+        summary,
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return CONFIRM
 
 
-async def confirm_choice(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def confirm_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
     if query.data == "confirm_no":
         await query.answer(
-            "این دکمه کار نمی‌کند! لطفاً دکمه تأیید را بزنید.",
+            "این دکمه فعلاً کار نمی‌کند؛ لطفاً تأیید است را بزنید.",
             show_alert=True,
         )
         return CONFIRM
 
     await query.answer()
-
     await query.edit_message_text(
-        "✅ اطلاعات شما تأیید شد.\n\n"
-        "🙏 تشکر از همکاری تان!\n"
-        "ثبت دیت شما با موفقیت تکمیل شد."
+        "ممنون از شما! ❤️\nاطلاعات شما تأیید شد و دیت با موفقیت ثبت گردید."
     )
 
-    logger.info(
-        "Registration confirmed for Telegram user ID: %s",
-        update.effective_user.id,
-    )
+    context.user_data.clear()
+    return ConversationHandler.END
 
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("فرایند ثبت متوقف شد. برای شروع دوباره /start را بزنید.")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -225,8 +199,7 @@ async def confirm_choice(
 def main():
     if not TOKEN:
         raise RuntimeError(
-            "BOT_TOKEN تنظیم نشده است. "
-            "توکن را در Environment Variables سرور وارد کنید."
+            "توکن تنظیم نشده است؛ متغیر BOT_TOKEN را در Render بررسی کنید."
         )
 
     app = Application.builder().token(TOKEN).build()
@@ -234,49 +207,28 @@ def main():
     conversation = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            START: [
-                CallbackQueryHandler(
-                    start_choice,
-                    pattern=r"^start_(yes|no)$",
-                )
-            ],
-            NAME: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_name,
-                )
-            ],
-            BIRTHDAY: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_birthday,
-                )
-            ],
-            EYE_COLOR: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_eye_color,
-                )
-            ],
-            USERNAME: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    get_username,
-                )
-            ],
-            CONFIRM: [
-                CallbackQueryHandler(
-                    confirm_choice,
-                    pattern=r"^confirm_(yes|no)$",
-                )
-            ],
+            START: [CallbackQueryHandler(start_choice, pattern="^(yes|no)$")],
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            BIRTHDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_birthday)],
+            EYE_COLOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_eye_color)],
+            HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_height)],
+            WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_weight)],
+            HAIR_COLOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_hair_color)],
+            HAIR_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_hair_length)],
+            FAVORITE_COLOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_favorite_color)],
+            FAVORITE_SONG: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_favorite_song)],
+            FAVORITE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_favorite_number)],
+            FAVORITE_ANIMAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_favorite_animal)],
+            USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
+            CONFIRM: [CallbackQueryHandler(
+                confirm_choice,
+                pattern="^(confirm_yes|confirm_no)$"
+            )],
         },
-        fallbacks=[CommandHandler("start", start)],
-        allow_reentry=True,
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     app.add_handler(conversation)
-
     logger.info("Bot is running...")
     app.run_polling()
 
