@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 # توکن را در تنظیمات محیطی سرور وارد کن
-TOKEN = os.environ.get(""BOT_TOKEN"")
+TOKEN = os.environ.get("BOT_TOKEN")
 
 START, NAME, BIRTHDAY, EYE_COLOR, USERNAME, CONFIRM = range(6)
 
