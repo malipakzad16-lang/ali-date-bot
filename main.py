@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timezone
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -98,6 +99,51 @@ def make_tracking_id():
     return "ALI-" + secrets.token_hex(4).upper()
 
 
+# ---------------- MESSAGE CLEANUP ----------------
+
+async def delete_old_bot_messages(context, chat_id):
+    """حذف پیام‌های قبلی ربات که در این نشست ثبت شده‌اند."""
+    message_ids = context.user_data.get("bot_message_ids", [])
+
+    for message_id in message_ids:
+        try:
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=message_id,
+            )
+        except TelegramError:
+            pass
+
+    context.user_data["bot_message_ids"] = []
+
+
+async def send_clean_message(
+    update,
+    context,
+    text,
+    reply_markup=None,
+):
+    """حذف پیام قبلی ربات و سپس ارسال پیام جدید."""
+    chat_id = update.effective_chat.id
+    await delete_old_bot_messages(context, chat_id)
+
+    message = await context.effective_message.reply_text(
+        text,
+        reply_markup=reply_markup,
+    )
+
+    context.user_data.setdefault("bot_message_ids", []).append(
+        message.message_id
+    )
+    return message
+
+
+async def remember_message(context, message):
+    context.user_data.setdefault("bot_message_ids", []).append(
+        message.message_id
+    )
+
+
 # ---------------- KEYBOARDS ----------------
 
 def start_keyboard():
@@ -107,10 +153,16 @@ def start_keyboard():
     ]])
 
 
+def no_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("بله ✅", callback_data="start_yes")
+    ]])
+
+
 def summary_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("تأیید ✅", callback_data="confirm_yes"),
+            InlineKeyboardButton("تأیید ثبت دیت ✅", callback_data="confirm_yes"),
             InlineKeyboardButton("تأیید نیست", callback_data="confirm_no"),
         ],
         [
@@ -161,17 +213,22 @@ def make_summary(data, tracking_id):
     return "\n".join(lines)
 
 
-async def show_summary(message, user_id):
+async def show_summary(update, context, user_id):
     registration = get_registration(user_id)
 
-    if registration:
-        await message.reply_text(
-            make_summary(
-                registration["data"],
-                registration["tracking_id"],
-            ),
-            reply_markup=summary_keyboard(),
-        )
+    if not registration:
+        return
+
+    message = await send_clean_message(
+        update,
+        context,
+        make_summary(
+            registration["data"],
+            registration["tracking_id"],
+        ),
+        reply_markup=summary_keyboard(),
+    )
+    return message
 
 
 # ---------------- COMMANDS ----------------
@@ -179,21 +236,28 @@ async def show_summary(message, user_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
-    await update.effective_message.reply_text(
+    message = await update.effective_message.reply_text(
         "سلام!\nآیا برای ثبت دیت با علی آمده‌اید؟",
         reply_markup=start_keyboard(),
     )
+    await remember_message(context, message)
 
 
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_summary(update.effective_message, update.effective_user.id)
+    await show_summary(update, context, update.effective_user.id)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await delete_old_bot_messages(
+        context,
+        update.effective_chat.id,
+    )
     context.user_data.clear()
-    await update.effective_message.reply_text(
+
+    message = await update.effective_message.reply_text(
         "روند فعلی متوقف شد. برای شروع دوباره /start را بزنید."
     )
+    await remember_message(context, message)
 
 
 # ---------------- BUTTON HANDLER ----------------
@@ -205,62 +269,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     action = query.data
 
-    # دکمه نخیر: پیام جدید نفرست؛ همان پنل را به پنل بله تبدیل کن
+    # نخیر: همان پیام را به پنل «برای ادامه بله را بزنید» تبدیل کن
     if action == "start_no":
-        await query.edit_message_reply_markup(
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("بله ✅", callback_data="start_yes")
-            ]])
-        )
+        try:
+            await query.edit_message_text(
+                "برای ادامه، دکمه «بله» را بزنید.",
+                reply_markup=no_keyboard(),
+            )
+        except TelegramError:
+            pass
         return
 
-    # شروع ثبت‌نام
+    # شروع ثبت جدید، حتی اگر کاربر قبلاً ثبت کرده باشد
     if action == "start_yes":
-        registration = get_registration(user_id)
+        await delete_old_bot_messages(context, query.message.chat_id)
 
-        if registration and registration["status"] == "confirmed":
-            await query.message.reply_text(
-                "ثبت قبلی شما تأیید شده است. برای دیدن اطلاعات /summary را بزنید."
-            )
-            return
+        tracking_id = make_tracking_id()
+        data = {}
 
-        tracking_id = (
-            registration["tracking_id"]
-            if registration
-            else make_tracking_id()
+        save_registration(
+            user_id,
+            tracking_id,
+            data,
+            "in_progress",
         )
-        data = registration["data"] if registration else {}
-
-        first_missing = next(
-            (
-                i for i, (key, _, _) in enumerate(FIELDS)
-                if not data.get(key)
-            ),
-            len(FIELDS),
-        )
-
-        save_registration(user_id, tracking_id, data, "in_progress")
 
         context.user_data["mode"] = "collect"
-        context.user_data["field_index"] = first_missing
+        context.user_data["field_index"] = 0
         context.user_data["tracking_id"] = tracking_id
 
-        if first_missing >= len(FIELDS):
-            context.user_data["mode"] = None
-            await show_summary(query.message, user_id)
-        else:
-            await query.message.reply_text(FIELDS[first_missing][2])
-        return
-
-    # دکمه تأیید نیست
-    if action == "confirm_no":
-        await query.answer(
-            "لطفاً دکمه تأیید را بزنید یا اطلاعات را ویرایش کنید.",
-            show_alert=True,
+        message = await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=FIELDS[0][2],
         )
+        await remember_message(context, message)
         return
 
-    # تأیید نهایی
+    # تأیید نیست: پنل باقی می‌ماند و پیام متنی جداگانه نمی‌آید
+    if action == "confirm_no":
+        try:
+            await query.answer(
+                "برای تأیید، دکمه «تأیید ثبت دیت» را بزنید یا ویرایش کنید.",
+                show_alert=True,
+            )
+        except TelegramError:
+            pass
+        return
+
+    # تأیید نهایی ثبت
     if action == "confirm_yes":
         registration = get_registration(user_id)
 
@@ -268,14 +324,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             not registration["data"].get(key)
             for key, _, _ in FIELDS
         ):
-            await query.message.reply_text(
-                "اطلاعات کامل نیست. لطفاً /start را بزنید."
-            )
-            return
-
-        if registration["status"] == "confirmed":
-            await query.message.reply_text(
-                "اطلاعات شما قبلاً تأیید شده است. تشکر از همکاری تان."
+            await query.answer(
+                "اطلاعات کامل نیست.",
+                show_alert=True,
             )
             return
 
@@ -304,52 +355,53 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=ADMIN_CHAT_ID,
                 text="\n".join(admin_lines),
             )
-        except Exception as error:
+        except TelegramError as error:
             print(f"Admin notification error: {error}")
-            await query.message.reply_text(
-                "ثبت شما تأیید شد، اما اعلان به مدیر ارسال نشد. "
-                "مدیر باید ربات را باز کند و /start بزند."
-            )
 
-        await query.message.reply_text(
-            "تشکر از همکاری تان.",
+        await delete_old_bot_messages(context, query.message.chat_id)
+
+        message = await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="تشکر از همکاری تان.",
         )
+        await remember_message(context, message)
         return
 
-    # نمایش پنل ویرایش فقط از خلاصه اطلاعات
+    # پنل ویرایش فقط در خلاصه
     if action == "edit_open":
         registration = get_registration(user_id)
 
         if not registration:
-            await query.message.reply_text(
-                "ابتدا /start را بزنید و اطلاعات خود را ثبت کنید."
-            )
+            await query.answer("ابتدا ثبت‌نام کنید.", show_alert=True)
             return
 
-        await query.message.reply_text(
-            "کدام بخش را می‌خواهید ویرایش کنید؟",
+        message = await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="کدام بخش را می‌خواهید ویرایش کنید؟",
             reply_markup=edit_keyboard(),
         )
+        await remember_message(context, message)
         return
 
     if action == "edit_back":
-        await show_summary(query.message, user_id)
+        await show_summary(update, context, user_id)
         return
 
-    # انتخاب بخش برای ویرایش
     if action.startswith("edit:"):
         key = action.split(":", 1)[1]
 
         if key not in FIELD_MAP:
-            await query.message.reply_text("بخش انتخاب‌شده معتبر نیست.")
+            await query.answer("بخش معتبر نیست.", show_alert=True)
             return
 
         context.user_data["mode"] = "edit"
         context.user_data["edit_key"] = key
 
-        await query.message.reply_text(
-            f"لطفاً مقدار جدید برای «{FIELD_MAP[key][1]}» را ارسال کنید."
+        message = await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"لطفاً مقدار جدید برای «{FIELD_MAP[key][1]}» را ارسال کنید.",
         )
+        await remember_message(context, message)
         return
 
 
@@ -360,70 +412,68 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = update.effective_message.text.strip()
 
     if not value:
-        await update.effective_message.reply_text(
-            "لطفاً یک مقدار معتبر ارسال کنید."
-        )
         return
 
     registration = get_registration(user_id)
 
     if not registration:
-        await update.effective_message.reply_text(
+        message = await update.effective_message.reply_text(
             "برای شروع /start را بزنید."
         )
+        await remember_message(context, message)
         return
 
     data = registration["data"]
     tracking_id = registration["tracking_id"]
     mode = context.user_data.get("mode")
 
-    # ویرایش یک فیلد
+    # ویرایش
     if mode == "edit":
         key = context.user_data.get("edit_key")
 
         if key not in FIELD_MAP:
-            await update.effective_message.reply_text(
-                "لطفاً بخش موردنظر را از پنل ویرایش انتخاب کنید."
-            )
             return
 
         if key == "birth_date" and not re.fullmatch(
             r"[0-9۰-۹٠-٩/.\-\s]+", value
         ):
-            await update.effective_message.reply_text(
+            message = await update.effective_message.reply_text(
                 "لطفاً تاریخ تولد را فقط به عدد ارسال کنید."
             )
+            await remember_message(context, message)
             return
 
         data[key] = value
-
-        # بعد از تغییر، تأیید قبلی باطل می‌شود
-        save_registration(user_id, tracking_id, data, "in_progress")
+        save_registration(
+            user_id,
+            tracking_id,
+            data,
+            "in_progress",
+        )
 
         context.user_data["mode"] = None
         context.user_data.pop("edit_key", None)
 
-        await update.effective_message.reply_text(
-            "اطلاعات ویرایش شد."
+        await delete_old_bot_messages(
+            context,
+            update.effective_chat.id,
         )
-        await update.effective_message.reply_text(
-            make_summary(data, tracking_id),
+
+        message = await update.effective_message.reply_text(
+            "اطلاعات ویرایش شد.\n\n" + make_summary(data, tracking_id),
             reply_markup=summary_keyboard(),
         )
+        await remember_message(context, message)
         return
 
-    # ثبت اطلاعات به ترتیب
+    # ثبت اطلاعات مرحله‌به‌مرحله
     if mode != "collect":
-        await update.effective_message.reply_text(
-            "برای ادامه از دکمه‌های ربات استفاده کنید یا /start را بزنید."
-        )
         return
 
     index = context.user_data.get("field_index", 0)
 
     if index >= len(FIELDS):
-        context.user_data["mode"] = None
-        await show_summary(update.effective_message, user_id)
+        await show_summary(update, context, user_id)
         return
 
     key, _label, _prompt = FIELDS[index]
@@ -431,28 +481,41 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if key == "birth_date" and not re.fullmatch(
         r"[0-9۰-۹٠-٩/.\-\s]+", value
     ):
-        await update.effective_message.reply_text(
+        message = await update.effective_message.reply_text(
             "لطفاً تاریخ تولد را فقط به عدد ارسال کنید."
         )
+        await remember_message(context, message)
         return
 
     data[key] = value
-    save_registration(user_id, tracking_id, data, "in_progress")
+    save_registration(
+        user_id,
+        tracking_id,
+        data,
+        "in_progress",
+    )
 
     index += 1
     context.user_data["field_index"] = index
 
+    await delete_old_bot_messages(
+        context,
+        update.effective_chat.id,
+    )
+
     if index < len(FIELDS):
-        await update.effective_message.reply_text(FIELDS[index][2])
+        message = await update.effective_message.reply_text(
+            FIELDS[index][2]
+        )
+        await remember_message(context, message)
     else:
         context.user_data["mode"] = None
-        await update.effective_message.reply_text(
-            "خیلی هم عالی، اطلاعات ثبت شد!"
-        )
-        await update.effective_message.reply_text(
-            make_summary(data, tracking_id),
+        message = await update.effective_message.reply_text(
+            "خیلی هم عالی، اطلاعات ثبت شد!\n\n"
+            + make_summary(data, tracking_id),
             reply_markup=summary_keyboard(),
         )
+        await remember_message(context, message)
 
 
 # ---------------- MAIN ----------------
